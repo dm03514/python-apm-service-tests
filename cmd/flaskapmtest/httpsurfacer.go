@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	"io/ioutil"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -35,10 +37,6 @@ func assertCorrect(body []byte) error {
 		return err
 	}
 
-	if len(r.Metrics) != 2 {
-		return fmt.Errorf("expected 2 metrics, received: %d", len(r.Metrics))
-	}
-
 	if _, ok := r.Metrics["pythonapm.http.request.time_microseconds"]; !ok {
 		return fmt.Errorf("key %q not found in map", "pythonapm.http.request.time_microseconds")
 	}
@@ -47,7 +45,25 @@ func assertCorrect(body []byte) error {
 		return fmt.Errorf("key %q not found in map", "pythonapm.http.request.rss.diff.bytes")
 	}
 
+	if _, ok := r.Metrics["pythonapm.instruments.allocators.str.count"]; !ok {
+		return fmt.Errorf("key %q not found in map", "pythonapm.instruments.allocators.str.count")
+	}
+
 	return nil
+}
+
+type handler struct {
+	requestsChan chan []byte
+}
+
+func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	bs, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		panic(err)
+	}
+	defer r.Body.Close()
+	h.requestsChan <- bs
+	http.Error(w, "OK", http.StatusOK)
 }
 
 // testHTTPSurfacer starts an HTTP server, exercises flask APM, then waits
@@ -56,21 +72,22 @@ func testHTTPSurfacer(addr string, path string, testServerAddr string, timeout t
 	requestsChan := make(chan []byte, 1)
 	timer := time.NewTimer(timeout)
 
-	go func() {
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			defer r.Body.Close()
-			bs, err := ioutil.ReadAll(r.Body)
-			if err != nil {
-				panic(err)
-			}
-			requestsChan <- bs
-		})
+	var wg sync.WaitGroup
+	wg.Add(1)
 
+	h := &http.Server{
+		Addr: testServerAddr,
+		Handler: handler{
+			requestsChan: requestsChan,
+		},
+	}
+
+	go func() {
 		log.WithFields(log.Fields{
 			"addr": testServerAddr,
 		}).Info("starting_http_listener")
 
-		if err := http.ListenAndServe(testServerAddr, nil); err != nil {
+		if err := h.ListenAndServe(); err != nil {
 			panic(err)
 		}
 	}()
@@ -89,6 +106,7 @@ func testHTTPSurfacer(addr string, path string, testServerAddr string, timeout t
 		if err != nil {
 			panic(err)
 		}
+		defer resp.Body.Close()
 
 		// verify that response is correct, in real script would handle errors gracefully
 		// instead of panic'ing
@@ -101,6 +119,7 @@ func testHTTPSurfacer(addr string, path string, testServerAddr string, timeout t
 			panic(fmt.Errorf("expected header %q to have a value, found %q", "dm03514/pythonapm", header))
 		}
 
+		wg.Done()
 	}()
 
 	log.WithFields(log.Fields{
@@ -119,6 +138,11 @@ forloop:
 			break forloop
 		}
 	}
+
+	wg.Wait()
+
+	ctx, _ := context.WithTimeout(context.Background(), 1*time.Second)
+	h.Shutdown(ctx)
 
 	// ignores graceful server cleanup
 	log.WithFields(log.Fields{

@@ -33,6 +33,7 @@ func waitHTTPReady(addr string, path string, timeout time.Duration) error {
 				fmt.Println(err)
 				continue
 			}
+			resp.Body.Close()
 
 			if resp.StatusCode >= 200 && resp.StatusCode <= 200 {
 				fmt.Printf("Service Ready code: %d", resp.StatusCode)

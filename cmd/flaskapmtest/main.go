@@ -30,9 +30,6 @@ func main() {
 	switch *cmd {
 	case "wait-ready":
 		err = waitHTTPReady(*addr, *path, time.Second*15)
-		if err != nil {
-			panic(err)
-		}
 	case "http-surfacer-metrics-correct":
 		err = testHTTPSurfacer(*addr, *path, *testServerAddr, time.Second*15)
 	default:
