@@ -88,7 +88,9 @@ func testHTTPSurfacer(addr string, path string, testServerAddr string, timeout t
 		}).Info("starting_http_listener")
 
 		if err := h.ListenAndServe(); err != nil {
-			panic(err)
+			log.WithFields(log.Fields{
+				"err": err,
+			}).Error("metric_server_listen_and_serve")
 		}
 	}()
 
